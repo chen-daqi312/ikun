@@ -29,6 +29,10 @@ COPY = collections.Counter()
 _orig_item = torch.Tensor.item
 _orig_to = torch.Tensor.to
 _orig_contig = torch.Tensor.contiguous
+# .float() / .half() / .double() do NOT route through Tensor.to, they are
+# separate C methods. patch them too or half the casts are invisible
+_orig_float = torch.Tensor.float
+_orig_half = torch.Tensor.half
 
 
 def _site():
@@ -59,6 +63,17 @@ def _to(self, *a, **kw):
     return out
 
 
+def _mk_cast(orig, name):
+    def f(self, *a, **kw):
+        out = orig(self, *a, **kw)
+        if out.dtype != self.dtype:
+            s = "{}:{}->{}[.{}()]".format(_site(), self.dtype, out.dtype, name)
+            CAST[s] += 1
+            print("@@@@@@@@cast={} n={}@@@@@@@@".format(s, CAST[s]), flush=True)
+        return out
+    return f
+
+
 def _contiguous(self, *a, **kw):
     out = _orig_contig(self, *a, **kw)
     if out.data_ptr() != self.data_ptr():
@@ -74,6 +89,8 @@ def install():
     torch.Tensor.item = _item
     torch.Tensor.to = _to
     torch.Tensor.contiguous = _contiguous
+    torch.Tensor.float = _mk_cast(_orig_float, "float")
+    torch.Tensor.half = _mk_cast(_orig_half, "half")
     print("========probe=installed depth={}============".format(_DEPTH), flush=True)
 
 
@@ -91,3 +108,5 @@ def uninstall():
     torch.Tensor.item = _orig_item
     torch.Tensor.to = _orig_to
     torch.Tensor.contiguous = _orig_contig
+    torch.Tensor.float = _orig_float
+    torch.Tensor.half = _orig_half
