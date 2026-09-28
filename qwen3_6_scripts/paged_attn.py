@@ -1540,11 +1540,13 @@ class PagedAttention:
         # Guard against uninitialized seq_lens entries (0x7FFF7FFF pattern)
         # from chunked prefill + GDN capture boundary metadata race.
         if actual_max > max_seq_len:
-            import logging as _logging
-            _logging.getLogger(__name__).warning(
-                "[BI100 PAGED_ATTN] seq_lens contains value %d > max_seq_len %d, "
-                "clamping (likely uninitialized metadata from chunked prefill)",
-                actual_max, max_seq_len)
+            if not getattr(PagedAttention, '_clamp_warned', False):
+                PagedAttention._clamp_warned = True
+                import logging as _logging
+                _logging.getLogger(__name__).warning(
+                    "[BI100 PAGED_ATTN] seq_lens contains value %d > max_seq_len %d, "
+                    "clamping (likely uninitialized metadata from chunked prefill)",
+                    actual_max, max_seq_len)
             seq_lens = seq_lens.clamp(max=max_seq_len)
             actual_max = max_seq_len
         block_size = value_cache.shape[3]
