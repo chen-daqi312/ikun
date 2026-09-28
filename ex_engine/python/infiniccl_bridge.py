@@ -69,12 +69,7 @@ def init_comm(rank, world_size):
 
 
 def infiniccl_allreduce(tensor):
-    global _comm, _rank, _world_size
-    if _comm is None:
-        assert dist.is_initialized(), "torch.distributed not initialized"
-        _rank = dist.get_rank()
-        _world_size = dist.get_world_size()
-        init_comm(_rank, _world_size)
+    assert _comm is not None, "infiniccl comm not initialized — call init_comm from load_weights first"
 
     if tensor.dtype == torch.float16:
         dtype_enum = 0

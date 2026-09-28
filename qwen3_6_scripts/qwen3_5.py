@@ -611,24 +611,18 @@ def _fused_linear_ar(input: torch.Tensor, weight: torch.Tensor,
     """GEMM via bridge + allreduce via infiniccl (or bridge fallback)."""
     global _fused_ar_call_count, _infiniccl_ar
     _fused_ar_call_count += 1
-    # lazy init infiniccl on first call (cant load at import time)
+    # lazy load infiniccl .so on first call (cant load at import time)
     if _fused_ar_call_count == 1 and _infiniccl_ar is None:
-        from ex_engine.python.infiniccl_bridge import _find_and_load, infiniccl_allreduce
-        _find_and_load()
+        from ex_engine.python.infiniccl_bridge import infiniccl_allreduce
         _infiniccl_ar = infiniccl_allreduce
-        print("[fused_ar] infiniccl activated on first call",
-              file=sys.stderr, flush=True)
+        print("[fused_ar] infiniccl activated", file=sys.stderr, flush=True)
     if _fused_ar_call_count <= 3:
         print(f"[fused_ar] call #{_fused_ar_call_count} "
               f"input={tuple(input.shape)} weight={tuple(weight.shape)} "
               f"infiniccl={'yes' if _infiniccl_ar else 'no'}",
               file=sys.stderr, flush=True)
-    if _infiniccl_ar is not None:
-        gemm_out = _fused_ar_bridge.linear(input.contiguous(), weight, bias)
-        return _infiniccl_ar(gemm_out)
-    else:
-        return _fused_ar_bridge.linear_allreduce(
-            input.contiguous(), weight, bias)
+    gemm_out = _fused_ar_bridge.linear(input.contiguous(), weight, bias)
+    return _infiniccl_ar(gemm_out)
 
 _MAX_IMAGE_TOKENS = 1280
 
@@ -3526,4 +3520,10 @@ class Qwen3_5MoeForCausalLM(Qwen3_5ForCausalLM):
         _bi100_model_trace(
             f"MoE load_weights complete items={loaded_count} "
             f"vision_items={vision_loaded_count}")
+        # init infiniccl comm — all TP workers execute load_weights together
+        if _FUSED_AR and _fused_ar_bridge is not None:
+            import torch.distributed as _dist
+            if _dist.is_initialized() and _dist.get_world_size() > 1:
+                from ex_engine.python.infiniccl_bridge import init_comm
+                init_comm(_dist.get_rank(), _dist.get_world_size())
 print("[qwen3_5] module load COMPLETE", file=sys.stderr, flush=True)
