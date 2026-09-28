@@ -61,7 +61,8 @@ def _find_and_load() -> Optional[ctypes.CDLL]:
 
 def init_comm(rank: int, world_size: int) -> bool:
     global _lib, _comm, _rank, _world_size
-    _lib = _find_and_load()
+    if _lib is None:
+        _lib = _find_and_load()
     if _lib is None:
         logger.warning("infiniccl not available, falling back to torch.distributed")
         return False
@@ -69,22 +70,34 @@ def init_comm(rank: int, world_size: int) -> bool:
     _rank = rank
     _world_size = world_size
 
+    import torch.distributed as dist
+
+    # rank 0 generates UniqueId, broadcast to all ranks via torch.distributed
     uid_buf = ctypes.create_string_buffer(128)
-    ret = _lib.infinicclGetUniqueId(uid_buf)
-    if ret != 0:
-        logger.warning("infinicclGetUniqueId failed: %d", ret)
-        return False
+    if rank == 0:
+        ret = _lib.infinicclGetUniqueId(uid_buf)
+        if ret != 0:
+            logger.warning("infinicclGetUniqueId failed: %d", ret)
+            return False
+
+    # broadcast the 128-byte uid from rank 0 to all ranks
+    uid_tensor = torch.frombuffer(uid_buf, dtype=torch.uint8).clone().cuda()
+    dist.broadcast(uid_tensor, src=0)
+    # copy back to uid_buf
+    uid_bytes = uid_tensor.cpu().numpy().tobytes()
+    ctypes.memmove(uid_buf, uid_bytes, 128)
 
     comm_ptr = ctypes.c_void_p()
     ret = _lib.infinicclCommInitRank(
         ctypes.byref(comm_ptr), world_size, uid_buf, rank
     )
     if ret != 0:
-        logger.warning("infinicclCommInitRank failed: %d", ret)
+        logger.warning("infinicclCommInitRank failed: %d rank=%d", ret, rank)
         return False
 
     _comm = comm_ptr
-    logger.info("infiniccl comm initialized rank=%d/%d", rank, world_size)
+    print(f"[infiniccl] comm initialized rank={rank}/{world_size}",
+          file=__import__('sys').stderr, flush=True)
     return True
 
 
