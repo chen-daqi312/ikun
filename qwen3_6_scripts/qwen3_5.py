@@ -3525,5 +3525,12 @@ class Qwen3_5MoeForCausalLM(Qwen3_5ForCausalLM):
             import torch.distributed as _dist
             if _dist.is_initialized() and _dist.get_world_size() > 1:
                 from ex_engine.python.infiniccl_bridge import init_comm
-                init_comm(_dist.get_rank(), _dist.get_world_size())
+                from vllm.distributed.parallel_state import (
+                    get_tensor_model_parallel_rank,
+                    get_tensor_model_parallel_world_size,
+                )
+                init_comm(
+                    get_tensor_model_parallel_rank(),
+                    get_tensor_model_parallel_world_size(),
+                )
 print("[qwen3_5] module load COMPLETE", file=sys.stderr, flush=True)

@@ -47,15 +47,24 @@ def init_comm(rank, world_size):
     _rank = rank
     _world_size = world_size
 
+    # set cuda device for this rank before nccl comm init
+    torch.cuda.set_device(rank)
+
     uid_buf = ctypes.create_string_buffer(128)
     if rank == 0:
         ret = _lib.infinicclGetUniqueId(uid_buf)
         assert ret == 0, f"infinicclGetUniqueId failed: {ret}"
 
-    uid_tensor = torch.frombuffer(uid_buf, dtype=torch.uint8).clone().cuda()
-    dist.broadcast(uid_tensor, src=0)
-    uid_bytes = uid_tensor.cpu().numpy().tobytes()
+    # broadcast uid via TP group (all TP ranks must participate)
+    from vllm.distributed.parallel_state import get_tp_group
+    tp = get_tp_group()
+    uid_tensor = torch.tensor(list(uid_buf.raw), dtype=torch.uint8).cuda()
+    dist.broadcast(uid_tensor, src=tp.ranks[0], group=tp.device_group)
+    uid_bytes = bytes(uid_tensor.cpu().tolist())
     ctypes.memmove(uid_buf, uid_bytes, 128)
+
+    print(f"[infiniccl] CommInitRank rank={rank}/{world_size} device={torch.cuda.current_device()}",
+          file=sys.stderr, flush=True)
 
     comm_ptr = ctypes.c_void_p()
     ret = _lib.infinicclCommInitRank(
