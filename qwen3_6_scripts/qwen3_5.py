@@ -2478,42 +2478,21 @@ class Qwen3_5MoeSparseBlock(nn.Module):
             gate_up, _ = self.shared_expert_gate_up(hidden_states)
             shared_act = self.act_fn(gate_up)
 
-            if _fused_ar_bridge is not None and self.experts.tp_size > 1:
-                # fused path: GEMM + all-reduce in one kernel for shared expert
-                # shared_expert_down has reduce_results=False, so normally it
-                # does GEMM-only and defers AR to the combine step below.
-                # Here we fuse the GEMM+AR, producing a fully-reduced shared_out.
-                # routed_out still needs its own AR.
-                shared_out = _fused_linear_ar(
-                    shared_act, self.shared_expert_down.weight,
-                    getattr(self.shared_expert_down, 'bias', None))
-                shared_out = shared_out * torch.sigmoid(gate_score)
-            else:
-                shared_out, _ = self.shared_expert_down(shared_act)
-                shared_out = shared_out * torch.sigmoid(gate_score)
+            # fused AR is NOT used here — shared + routed are both TP-partial
+            # and get combined before a single allreduce. fusing the shared
+            # expert down would force a separate allreduce for routed_out,
+            # turning 1 AR into 2 per MoE layer (40 extra ARs per step)
+            shared_out, _ = self.shared_expert_down(shared_act)
+            shared_out = shared_out * torch.sigmoid(gate_score)
 
         # --- Reduction ---
-        # 81 logical all-reduces per decode step. This block handles 40 (MoE layers).
-        #
-        # Without fused AR (original):
-        #   combine(routed_partial + shared_partial) → 1× allreduce
-        #   = 1 AR per layer, minimal AR count
-        #
-        # With fused AR:
-        #   shared_out is already fully reduced (fused GEMM+AR above)
-        #   only routed_out needs AR → 1× allreduce (routed only)
-        #   then combine: out = routed_full + shared_full
-        #   Same AR count (1), but shared path GEMM+AR overlap hides ~200us fence latency
+        # routed_out and shared_out are both TP-partial, combine first then
+        # one allreduce — do NOT split into 2 ARs (see trace regression 9.5→10.5)
         _ep = getattr(self.experts, '_ep_enabled', False)
         if _ep:
             from vllm.ep_fused_moe_patch import ep_reduce_output
             with bi100_timer("moe.ep_reduce"):
                 out = ep_reduce_output(routed_out, shared_out)
-        elif _fused_ar_bridge is not None and self.experts.tp_size > 1:
-            with bi100_timer("moe.routed_ar"):
-                routed_full = tensor_model_parallel_all_reduce(routed_out)
-            with bi100_timer("moe.combine"):
-                out = routed_full + shared_out
         else:
             with bi100_timer("moe.combine"):
                 out = routed_out + shared_out

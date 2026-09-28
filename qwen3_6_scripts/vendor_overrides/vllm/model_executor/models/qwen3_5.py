@@ -2503,14 +2503,8 @@ class Qwen3_5MoeSparseBlock(nn.Module):
             gate_up, _ = self.shared_expert_gate_up(hidden_states)
             shared_act = self.act_fn(gate_up)
 
-            if _fused_ar_bridge is not None and self.experts.tp_size > 1:
-                shared_out = _fused_linear_ar(
-                    shared_act, self.shared_expert_down.weight,
-                    getattr(self.shared_expert_down, 'bias', None))
-                shared_out = shared_out * torch.sigmoid(gate_score)
-            else:
-                shared_out, _ = self.shared_expert_down(shared_act)
-                shared_out = shared_out * torch.sigmoid(gate_score)
+            shared_out, _ = self.shared_expert_down(shared_act)
+            shared_out = shared_out * torch.sigmoid(gate_score)
 
         # --- Reduction ---
         _ep = getattr(self.experts, '_ep_enabled', False)
@@ -2518,11 +2512,6 @@ class Qwen3_5MoeSparseBlock(nn.Module):
             from vllm.ep_fused_moe_patch import ep_reduce_output
             with bi100_timer("moe.ep_reduce"):
                 out = ep_reduce_output(routed_out, shared_out)
-        elif _fused_ar_bridge is not None and self.experts.tp_size > 1:
-            with bi100_timer("moe.routed_ar"):
-                routed_full = tensor_model_parallel_all_reduce(routed_out)
-            with bi100_timer("moe.combine"):
-                out = routed_full + shared_out
         else:
             with bi100_timer("moe.combine"):
                 out = routed_out + shared_out
