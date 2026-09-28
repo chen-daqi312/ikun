@@ -573,11 +573,15 @@ if env_bool("BI100_HOT_PATH_PATCH", True):
 # Old approach (monkey-patch RowParallelLinear.forward) only covers 40/81.
 # New approach: load bridge once, call directly in each forward path.
 #
-# ix_full_bridge_fused_ar.linear_allreduce(input, weight, bias)
-#   = allreduce(input @ weight.T + bias) in a single kernel launch
-#   eliminates the fence pair (fenceWait + fenceOps) between GEMM and AR
+# ix_full_bridge_fused_ar.linear(input, weight, bias) = GEMM only
+# infiniccl_allreduce(tensor) = allreduce via InfiniCCL (bypass NCCL fence)
+#
+# previous approach used bridge.linear_allreduce which still goes through
+# NCCL internally, keeping all 972 fence pairs. new approach splits into
+# bridge.linear (GEMM) + infiniccl (allreduce) to bypass the fence.
 # ---------------------------------------------------------------------------
 _fused_ar_bridge = None
+_infiniccl_ar = None
 _FUSED_AR = env_bool("BI100_FUSED_LINEAR_ALLREDUCE", False)
 if _FUSED_AR:
     try:
@@ -585,12 +589,27 @@ if _FUSED_AR:
         if _load_bridge():
             from ex_engine.python.patch_fused_linear_allreduce import _bridge_fused_ar
             _fused_ar_bridge = _bridge_fused_ar
-            print(f"[xllm] fused_ar bridge loaded: {_fused_ar_bridge}",
+            print(f"[fused_ar] bridge loaded: {_fused_ar_bridge}",
                   file=sys.stderr, flush=True)
         else:
-            print("[xllm] fused_ar bridge .so not found", file=sys.stderr, flush=True)
+            print("[fused_ar] bridge .so not found", file=sys.stderr, flush=True)
     except Exception as _e:
-        print(f"[xllm] fused_ar bridge load FAILED: {_e}",
+        print(f"[fused_ar] bridge load FAILED: {_e}",
+              file=sys.stderr, flush=True)
+    # try infiniccl for fence-free allreduce
+    try:
+        from ex_engine.python.infiniccl_bridge import _find_and_load as _iccl_find
+        _iccl_lib = _iccl_find()
+        if _iccl_lib is not None:
+            from ex_engine.python.infiniccl_bridge import infiniccl_allreduce
+            _infiniccl_ar = infiniccl_allreduce
+            print(f"[fused_ar] infiniccl loaded, allreduce available",
+                  file=sys.stderr, flush=True)
+        else:
+            print("[fused_ar] infiniccl .so not found, using bridge.linear_allreduce",
+                  file=sys.stderr, flush=True)
+    except Exception as _e:
+        print(f"[fused_ar] infiniccl load FAILED: {_e}",
               file=sys.stderr, flush=True)
 
 
@@ -600,16 +619,22 @@ _fused_ar_else_count = 0
 
 def _fused_linear_ar(input: torch.Tensor, weight: torch.Tensor,
                      bias: Optional[torch.Tensor] = None) -> torch.Tensor:
-    """Fused GEMM + all-reduce in one kernel launch via ix_full_bridge .so."""
+    """GEMM via bridge + allreduce via infiniccl (or bridge fallback)."""
     global _fused_ar_call_count
     _fused_ar_call_count += 1
     if _fused_ar_call_count <= 3:
-        print(f"[fused_ar] python call #{_fused_ar_call_count} "
+        print(f"[fused_ar] call #{_fused_ar_call_count} "
               f"input={tuple(input.shape)} weight={tuple(weight.shape)} "
-              f"dtype={input.dtype} device={input.device}",
+              f"infiniccl={'yes' if _infiniccl_ar else 'no'}",
               file=sys.stderr, flush=True)
-    return _fused_ar_bridge.linear_allreduce(
-        input.contiguous(), weight, bias)
+    if _infiniccl_ar is not None:
+        # split path: bridge.linear (GEMM) + infiniccl (allreduce)
+        gemm_out = _fused_ar_bridge.linear(input.contiguous(), weight, bias)
+        return _infiniccl_ar(gemm_out)
+    else:
+        # fallback: bridge.linear_allreduce (GEMM + NCCL allreduce)
+        return _fused_ar_bridge.linear_allreduce(
+            input.contiguous(), weight, bias)
 
 _MAX_IMAGE_TOKENS = 1280
 
