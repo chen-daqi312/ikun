@@ -42,7 +42,6 @@ PREBUILT_SO = [
 
 # Base image .so files (from /usr/local/corex/lib64/)
 BASE_IMAGE_SO = [
-    "/usr/local/corex/lib64/libcorex_gdn.so",
     "/usr/local/corex/lib64/libcublas.so",
     "/usr/local/corex/lib64/libcudart.so",
     "/usr/local/corex/lib64/libcudnn.so",
@@ -115,7 +114,7 @@ def check_base_image_so(path):
     if not os.path.exists(path):
         return False, "file not found"
     try:
-        lib = ctypes.CDLL(path, mode=ctypes.RTLD_LAZY)
+        lib = ctypes.CDLL(path, mode=ctypes.RTLD_LOCAL)
         return True, f"loaded ({os.path.getsize(path)} bytes)"
     except Exception as e:
         return False, str(e)
