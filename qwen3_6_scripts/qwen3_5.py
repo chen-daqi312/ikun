@@ -596,21 +596,12 @@ if _FUSED_AR:
     except Exception as _e:
         print(f"[fused_ar] bridge load FAILED: {_e}",
               file=sys.stderr, flush=True)
-    # try infiniccl for fence-free allreduce
-    try:
-        from ex_engine.python.infiniccl_bridge import _find_and_load as _iccl_find
-        _iccl_lib = _iccl_find()
-        if _iccl_lib is not None:
-            from ex_engine.python.infiniccl_bridge import infiniccl_allreduce
-            _infiniccl_ar = infiniccl_allreduce
-            print(f"[fused_ar] infiniccl loaded, allreduce available",
-                  file=sys.stderr, flush=True)
-        else:
-            print("[fused_ar] infiniccl .so not found, using bridge.linear_allreduce",
-                  file=sys.stderr, flush=True)
-    except Exception as _e:
-        print(f"[fused_ar] infiniccl load FAILED: {_e}",
-              file=sys.stderr, flush=True)
+    # infiniccl for fence-free allreduce
+    from ex_engine.python.infiniccl_bridge import _find_and_load as _iccl_find
+    from ex_engine.python.infiniccl_bridge import infiniccl_allreduce
+    _iccl_find()  # assert if .so not found
+    _infiniccl_ar = infiniccl_allreduce
+    print("[fused_ar] infiniccl loaded", file=sys.stderr, flush=True)
 
 
 _fused_ar_call_count = 0
