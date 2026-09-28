@@ -89,6 +89,18 @@ def init_comm(rank: int, world_size: int) -> bool:
 
 
 def infiniccl_allreduce(tensor: torch.Tensor) -> torch.Tensor:
+    global _comm, _rank, _world_size
+    # lazy init: first call triggers comm setup from torch.distributed
+    if _lib is not None and _comm is None:
+        try:
+            import torch.distributed as dist
+            if dist.is_initialized():
+                _rank = dist.get_rank()
+                _world_size = dist.get_world_size()
+                init_comm(_rank, _world_size)
+        except Exception as e:
+            logger.warning("infiniccl lazy init failed: %s", e)
+
     if _lib is None or _comm is None:
         from vllm.distributed.communication_op import tensor_model_parallel_all_reduce
         return tensor_model_parallel_all_reduce(tensor)
