@@ -93,6 +93,11 @@ def init_comm(rank, world_size):
     print(f"[infiniccl] comm initialized rank={rank}/{world_size}",
           file=sys.stderr, flush=True)
 
+    # register for cleanup on signal — prevents GPU driver corruption
+    from ex_engine.python.nccl_cleanup import install, register_comm
+    install()
+    register_comm(_comm)
+
 
 def infiniccl_allreduce(tensor):
     assert _comm is not None, "comm not initialized"
