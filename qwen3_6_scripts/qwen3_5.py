@@ -596,12 +596,10 @@ if _FUSED_AR:
     except Exception as _e:
         print(f"[fused_ar] bridge load FAILED: {_e}",
               file=sys.stderr, flush=True)
-    # infiniccl for fence-free allreduce
-    from ex_engine.python.infiniccl_bridge import _find_and_load as _iccl_find
-    from ex_engine.python.infiniccl_bridge import infiniccl_allreduce
-    _iccl_find()  # assert if .so not found
-    _infiniccl_ar = infiniccl_allreduce
-    print("[fused_ar] infiniccl loaded", file=sys.stderr, flush=True)
+    # infiniccl loaded lazily on first _fused_linear_ar call (not at import
+    # time — loading libtorch_cuda.so during module import causes double-free)
+    _infiniccl_ar = None  # set on first call
+    print("[fused_ar] infiniccl deferred to first call", file=sys.stderr, flush=True)
 
 
 _fused_ar_call_count = 0
@@ -611,19 +609,24 @@ _fused_ar_else_count = 0
 def _fused_linear_ar(input: torch.Tensor, weight: torch.Tensor,
                      bias: Optional[torch.Tensor] = None) -> torch.Tensor:
     """GEMM via bridge + allreduce via infiniccl (or bridge fallback)."""
-    global _fused_ar_call_count
+    global _fused_ar_call_count, _infiniccl_ar
     _fused_ar_call_count += 1
+    # lazy init infiniccl on first call (cant load at import time)
+    if _fused_ar_call_count == 1 and _infiniccl_ar is None:
+        from ex_engine.python.infiniccl_bridge import _find_and_load, infiniccl_allreduce
+        _find_and_load()
+        _infiniccl_ar = infiniccl_allreduce
+        print("[fused_ar] infiniccl activated on first call",
+              file=sys.stderr, flush=True)
     if _fused_ar_call_count <= 3:
         print(f"[fused_ar] call #{_fused_ar_call_count} "
               f"input={tuple(input.shape)} weight={tuple(weight.shape)} "
               f"infiniccl={'yes' if _infiniccl_ar else 'no'}",
               file=sys.stderr, flush=True)
     if _infiniccl_ar is not None:
-        # split path: bridge.linear (GEMM) + infiniccl (allreduce)
         gemm_out = _fused_ar_bridge.linear(input.contiguous(), weight, bias)
         return _infiniccl_ar(gemm_out)
     else:
-        # fallback: bridge.linear_allreduce (GEMM + NCCL allreduce)
         return _fused_ar_bridge.linear_allreduce(
             input.contiguous(), weight, bias)
 
