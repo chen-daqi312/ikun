@@ -44,6 +44,7 @@ def _load_bridge():
     try:
         import vllm
         vllm_root = os.path.dirname(vllm.__file__)
+        search.append(os.path.join(vllm_root, "ix_full_bridge_fused_ar.so"))
         search.append(os.path.join(vllm_root, "ex_engine", "ix_full_bridge_fused_ar.so"))
         search.append(os.path.join(vllm_root, "model_executor", "models", "ix_full_bridge_fused_ar.so"))
     except ImportError:
@@ -77,7 +78,7 @@ def _load_bridge():
                     logger.info("Loaded ix_full_bridge_fused_ar from %s", path)
                     return True
             except Exception as e:
-                logger.debug("Failed to load %s: %s", path, e)
+                logger.warning("Failed to load %s: %s", path, e)
 
     logger.warning("ix_full_bridge_fused_ar.so not found — fused linear_allreduce unavailable")
     return False
