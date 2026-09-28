@@ -36,12 +36,6 @@ def configure_dp(moe_block: nn.Module, dp_size: int, dp_rank: int) -> None:
 
 
 
-# ---------------------------------------------------------------------------
-# runtime log markers. off unless IKUN_TRACE=1
-#   ======== normal state
-#   @@@@@@@@ something is wrong / slow path taken
-# grep the marker, dont read the whole log
-# ---------------------------------------------------------------------------
 import os as _os
 
 _IKUN_TRACE = _os.environ.get("IKUN_TRACE", "0") == "1"
