@@ -46,7 +46,7 @@ def worker(rank, world_size, uid_bytes, result_dict):
 
     # reconstruct uid
     uid = InfiniCclUniqueId()
-    uid.internal = uid_bytes
+    ctypes.memmove(ctypes.byref(uid), uid_bytes, 128)
 
     # init comm
     comm = ctypes.c_void_p()
@@ -95,7 +95,7 @@ def main():
     uid = InfiniCclUniqueId()
     ret = lib.infinicclGetUniqueId(ctypes.byref(uid))
     assert ret == 0, f"GetUniqueId failed: {ret}"
-    uid_bytes = uid.internal
+    uid_bytes = bytes(uid)  # full 128 bytes; uid.internal truncates at \x00
 
     manager = mp.Manager()
     result_dict = manager.dict()

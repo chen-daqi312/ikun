@@ -78,9 +78,10 @@ def init_comm(rank, world_size):
     # broadcast uid via TP group
     from vllm.distributed.parallel_state import get_tp_group
     tp = get_tp_group()
-    uid_tensor = torch.tensor(list(uid.internal), dtype=torch.uint8).cuda()
+    # bytes(uid) gives full 128 bytes; uid.internal truncates at first \x00
+    uid_tensor = torch.tensor(list(bytes(uid)), dtype=torch.uint8).cuda()
     dist.broadcast(uid_tensor, src=tp.ranks[0], group=tp.device_group)
-    uid.internal = bytes(uid_tensor.cpu().tolist())
+    ctypes.memmove(ctypes.byref(uid), bytes(uid_tensor.cpu().tolist()), 128)
 
     print(f"[infiniccl] CommInitRank rank={rank}/{world_size} device={torch.cuda.current_device()}",
           file=sys.stderr, flush=True)
