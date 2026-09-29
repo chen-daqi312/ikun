@@ -60,10 +60,43 @@ class DeviceCommunicatorBase:
                 device=self.device,
             )   
 
+        self._use_infiniccl = (
+            os.environ.get("BI100_FUSED_LINEAR_ALLREDUCE", "0") == "1"
+            and "tp" in unique_name
+            and self.world_size > 1
+        )
+        self._infiniccl_ready = False
+
+    def _init_infiniccl(self):
+        if self._infiniccl_ready:
+            return True
+        try:
+            from ex_engine.python.infiniccl_bridge import init_comm, _comm
+            if _comm is not None:
+                self._infiniccl_ready = True
+                return True
+            init_comm(self.rank_in_group, self.world_size)
+            self._infiniccl_ready = True
+            import sys
+            print(f"[infiniccl] communicator initialized rank={self.rank_in_group}/{self.world_size}",
+                  file=sys.stderr, flush=True)
+            return True
+        except Exception as e:
+            import sys
+            print(f"[infiniccl] init failed: {e}, falling back to ixformer/nccl",
+                  file=sys.stderr, flush=True)
+            self._use_infiniccl = False
+            return False
+
     def all_reduce(self, input_: torch.Tensor) -> torch.Tensor:
         
         if self.world_size == 1:
             return input_
+
+        if self._use_infiniccl:
+            if self._infiniccl_ready or self._init_infiniccl():
+                from ex_engine.python.infiniccl_bridge import infiniccl_allreduce
+                return infiniccl_allreduce(input_)
         
         if self.use_vllm_comm:
             ixfd.all_reduce(input_, group=self.ixformer_group, async_op=True)
