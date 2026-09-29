@@ -101,27 +101,27 @@ def init_comm(rank, world_size):
 
 
 def infiniccl_allreduce(tensor):
-    assert _comm is not None, "comm not initialized"
+    assert _comm is not None, "call init_comm first"
 
-    # infinicclDataType: 0=float16, 1=float32
     if tensor.dtype == torch.float16:
         dtype_enum = 8
     elif tensor.dtype == torch.float32:
         dtype_enum = 10
+    elif tensor.dtype == torch.bfloat16:
+        dtype_enum = 9
     else:
         raise TypeError(f"unsupported dtype: {tensor.dtype}")
 
-    out = torch.empty_like(tensor)
     stream = torch.cuda.current_stream().cuda_stream
 
     ret = _lib.infinicclAllReduce(
         ctypes.c_void_p(tensor.data_ptr()),
-        ctypes.c_void_p(out.data_ptr()),
+        ctypes.c_void_p(tensor.data_ptr()),
         tensor.numel(),
         dtype_enum,
-        0,  # infinicclSum
+        0,
         _comm,
         ctypes.c_void_p(stream),
     )
     assert ret == 0, f"infinicclAllReduce failed: {ret}"
-    return out
+    return tensor
