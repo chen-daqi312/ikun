@@ -73,6 +73,9 @@ class DeviceCommunicatorBase:
             return True
         try:
             import ctypes
+            for p in ['/home/ikun', '/workspace']:
+                if p not in sys.path:
+                    sys.path.insert(0, p)
             from ex_engine.python.infiniccl_bridge import (
                 _find_and_load, _lib, _comm, InfiniCclUniqueId,
             )
@@ -107,10 +110,11 @@ class DeviceCommunicatorBase:
                   file=sys.stderr, flush=True)
             return True
         except Exception as e:
-            print(f"[infiniccl] init failed: {e}, falling back",
+            print(f"[infiniccl] FATAL: init failed: {e}",
                   file=sys.stderr, flush=True)
-            self._use_infiniccl = False
-            return False
+            print(f"[infiniccl] refusing to fallback to nccl (driver corruption risk)",
+                  file=sys.stderr, flush=True)
+            os._exit(1)
 
     def all_reduce(self, input_: torch.Tensor) -> torch.Tensor:
         
