@@ -7,6 +7,7 @@ from torch.distributed import ProcessGroup
 import ixformer.distributed as ixfd
 from ixformer.contrib.torch.extension.ixformer_torch.distributed import create_ixformer_group_from_pg
 import os
+import sys
 
 
 class DeviceCommunicatorBase:
@@ -71,19 +72,42 @@ class DeviceCommunicatorBase:
         if self._infiniccl_ready:
             return True
         try:
-            from ex_engine.python.infiniccl_bridge import init_comm, _comm
-            if _comm is not None:
+            import ctypes
+            from ex_engine.python.infiniccl_bridge import (
+                _find_and_load, _lib, _comm, InfiniCclUniqueId,
+            )
+            import ex_engine.python.infiniccl_bridge as bridge
+
+            if bridge._comm is not None:
                 self._infiniccl_ready = True
                 return True
-            init_comm(self.rank_in_group, self.world_size)
+
+            if bridge._lib is None:
+                _find_and_load()
+
+            uid = InfiniCclUniqueId()
+            if self.rank_in_group == 0:
+                ret = bridge._lib.infinicclGetUniqueId(ctypes.byref(uid))
+                assert ret == 0, f"infinicclGetUniqueId failed: {ret}"
+
+            uid_tensor = torch.tensor(list(bytes(uid)), dtype=torch.uint8).cuda()
+            dist.broadcast(uid_tensor, src=self.ranks[0], group=self.cpu_group)
+            ctypes.memmove(ctypes.byref(uid), bytes(uid_tensor.cpu().tolist()), 128)
+
+            comm_ptr = ctypes.c_void_p()
+            ret = bridge._lib.infinicclCommInitRank(
+                ctypes.byref(comm_ptr), self.world_size, uid, self.rank_in_group)
+            assert ret == 0, f"infinicclCommInitRank failed: {ret}"
+
+            bridge._comm = comm_ptr
+            bridge._rank = self.rank_in_group
+            bridge._world_size = self.world_size
             self._infiniccl_ready = True
-            import sys
-            print(f"[infiniccl] communicator initialized rank={self.rank_in_group}/{self.world_size}",
+            print(f"[infiniccl] comm ready rank={self.rank_in_group}/{self.world_size}",
                   file=sys.stderr, flush=True)
             return True
         except Exception as e:
-            import sys
-            print(f"[infiniccl] init failed: {e}, falling back to ixformer/nccl",
+            print(f"[infiniccl] init failed: {e}, falling back",
                   file=sys.stderr, flush=True)
             self._use_infiniccl = False
             return False
