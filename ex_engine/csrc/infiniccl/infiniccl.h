@@ -12,7 +12,7 @@ typedef void *infinicclComm_t;
 typedef struct { char internal[INFINICCL_UNIQUE_ID_BYTES]; } infinicclUniqueId;
 
 typedef enum { INFINICCL_SUCCESS = 0, INFINICCL_ERROR = 1 } infinicclResult_t;
-typedef enum { infinicclFloat16 = 0, infinicclFloat32 = 1 } infinicclDataType_t;
+typedef enum { infinicclFloat16 = 8, infinicclFloat32 = 10 } infinicclDataType_t;
 typedef enum { infinicclSum = 0 } infinicclRedOp_t;
 
 infinicclResult_t infinicclGetUniqueId(infinicclUniqueId *id);

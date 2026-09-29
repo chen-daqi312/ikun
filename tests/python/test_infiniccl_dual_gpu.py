@@ -65,7 +65,7 @@ def worker(rank, world_size, uid_bytes, result_dict):
     ret = lib.infinicclAllReduce(
         ctypes.c_void_p(inp.data_ptr()),
         ctypes.c_void_p(out.data_ptr()),
-        256, 0, 0, comm, ctypes.c_void_p(stream))
+        256, 8, 0, comm, ctypes.c_void_p(stream))
 
     torch.cuda.synchronize()
 

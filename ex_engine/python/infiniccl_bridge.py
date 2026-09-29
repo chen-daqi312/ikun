@@ -105,9 +105,9 @@ def infiniccl_allreduce(tensor):
 
     # infinicclDataType: 0=float16, 1=float32
     if tensor.dtype == torch.float16:
-        dtype_enum = 0
+        dtype_enum = 8
     elif tensor.dtype == torch.float32:
-        dtype_enum = 1
+        dtype_enum = 10
     else:
         raise TypeError(f"unsupported dtype: {tensor.dtype}")
 
