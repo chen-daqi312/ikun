@@ -2054,14 +2054,23 @@ class CUDAGraphRunner(nn.Module):
                 **_model_extra,
             )
 
+            # BI100: weak_ref_tensor requires vllm._custom_ops.weak_ref_tensor
+            # which is absent in the corex build.  Fall back to identity —
+            # slightly higher graph-pool memory, zero correctness impact.
+            def _safe_weak_ref(t):
+                try:
+                    return weak_ref_tensor(t)
+                except (AttributeError, NotImplementedError):
+                    return t
+
             if isinstance(output_hidden_or_intermediate_states, torch.Tensor):
-                hidden_or_intermediate_states = weak_ref_tensor(
+                hidden_or_intermediate_states = _safe_weak_ref(
                     output_hidden_or_intermediate_states)
             elif isinstance(output_hidden_or_intermediate_states,
                             IntermediateTensors):
                 hidden_or_intermediate_states = IntermediateTensors(
                     tensors={
-                        key: weak_ref_tensor(value)
+                        key: _safe_weak_ref(value)
                         for key, value in
                         output_hidden_or_intermediate_states.tensors.items()
                     })
