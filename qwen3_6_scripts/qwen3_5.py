@@ -2138,24 +2138,28 @@ class Qwen3_5MoeSparseBlock(nn.Module):
         if _USE_IX_FUSED_MOE:
             w13 = self.experts.w13_weight  # (E, 2*I, H)
             w2 = self.experts.w2_weight    # (E, H, I)
+            # Diagnostic logging uses .item() (GPU→CPU sync) which is
+            # invalid during CUDA Graph capture.  Skip when capturing.
             _ix_cnt = getattr(self, '_ix_diag_cnt', 0)
-            _in_nan = hidden_states.isnan().any().item()
-            if _ix_cnt < 5 or (_in_nan and _ix_cnt < 200):
-                self._ix_diag_cnt = _ix_cnt + 1
-                logger.info(
-                    "[IX_MOE] call=%d T=%d in_nan=%s in_norm=%.4f "
-                    "logits_range=[%.4f,%.4f] w13=%s",
-                    _ix_cnt, hidden_states.shape[0], _in_nan,
-                    hidden_states.float().norm().item() if not _in_nan else -1,
-                    router_logits.min().item() if not _in_nan else -1,
-                    router_logits.max().item() if not _in_nan else -1,
-                    list(w13.shape))
+            _capturing = torch.cuda.is_current_stream_capturing() if hasattr(torch.cuda, 'is_current_stream_capturing') else False
+            if not _capturing:
+                _in_nan = hidden_states.isnan().any().item()
+                if _ix_cnt < 5 or (_in_nan and _ix_cnt < 200):
+                    self._ix_diag_cnt = _ix_cnt + 1
+                    logger.info(
+                        "[IX_MOE] call=%d T=%d in_nan=%s in_norm=%.4f "
+                        "logits_range=[%.4f,%.4f] w13=%s",
+                        _ix_cnt, hidden_states.shape[0], _in_nan,
+                        hidden_states.float().norm().item() if not _in_nan else -1,
+                        router_logits.min().item() if not _in_nan else -1,
+                        router_logits.max().item() if not _in_nan else -1,
+                        list(w13.shape))
             out = _ix_fused_moe.fused_moe_forward(
                 hidden_states, router_logits.float(),
                 w13, w2,
                 self.top_k, w13.shape[0],
                 True)  # renormalize
-            if _ix_cnt < 5:
+            if not _capturing and _ix_cnt < 5:
                 logger.info(
                     "[IX_MOE] call=%d out_nan=%s out_norm=%.4f",
                     _ix_cnt, bool(out.isnan().any()),
@@ -2168,7 +2172,14 @@ class Qwen3_5MoeSparseBlock(nn.Module):
         # No physical transpose, no weight gather copy
         # Source: ds_vllm/vllm/.../experts/fused_batched_moe.py
         # ---------------------------------------------------------------
-        if _USE_NAIVE_BATCHED_MOE and hidden_states.shape[0] > 1:
+        # Tier 0.5 normally requires batch > 1.  During CUDA Graph capture
+        # we must also use it for batch == 1, because Tier 1 below uses
+        # .tolist() (GPU→CPU sync) and data-dependent expert dispatch,
+        # both incompatible with graph capture.
+        _capture_compat = (torch.cuda.is_current_stream_capturing()
+                           if hasattr(torch.cuda, 'is_current_stream_capturing')
+                           else False)
+        if _USE_NAIVE_BATCHED_MOE and (hidden_states.shape[0] > 1 or _capture_compat):
             w13 = self.experts.w13_weight  # (E, 2*I, H)
             w2 = self.experts.w2_weight    # (E, H, I)
 
@@ -2273,7 +2284,8 @@ class Qwen3_5MoeSparseBlock(nn.Module):
             # .item() here does ONE GPU→CPU sync per layer. CUDA pipelines
             # the 8 scalar transfers into one sync. 40 layers × ~30μs = ~1.2ms,
             # far less than the ~50ms saved by skipping 6 experts' GEMM.
-            if _ep:
+            _capturing_ep = torch.cuda.is_current_stream_capturing() if hasattr(torch.cuda, 'is_current_stream_capturing') else False
+            if _ep and not _capturing_ep:
                 valid = ws != 0
                 K_local = valid.sum().item()
                 if K_local == 0:
@@ -2513,7 +2525,8 @@ class Qwen3_5MoeSparseBlock(nn.Module):
                 with bi100_timer("moe.all_reduce"):
                     out = tensor_model_parallel_all_reduce(out)
         _fwd_cnt = getattr(self, '_fwd_diag_cnt', 0)
-        if _fwd_cnt < 3:
+        _capturing = torch.cuda.is_current_stream_capturing() if hasattr(torch.cuda, 'is_current_stream_capturing') else False
+        if _fwd_cnt < 3 and not _capturing:
             self._fwd_diag_cnt = _fwd_cnt + 1
             logger.info(
                 "[MoE_FWD] ep=%s call=%d T=%d routed=%.4f shared=%.4f final=%.4f",
@@ -3221,7 +3234,8 @@ class Qwen3_5ForCausalLM(nn.Module, HasInnerState, SupportsLoRA,
                                        sampling_metadata)
         if logits is not None:
             _cnt = getattr(self, '_logits_diag_cnt', 0)
-            if _cnt < 5:
+            _capturing = torch.cuda.is_current_stream_capturing() if hasattr(torch.cuda, 'is_current_stream_capturing') else False
+            if _cnt < 5 and not _capturing:
                 self._logits_diag_cnt = _cnt + 1
                 try:
                     top5_vals, top5_ids = logits[-1].topk(5)
