@@ -1,0 +1,92 @@
+name: gate-notify
+
+# 关闭一个门禁 issue 时：
+#   1. 检查是否贴了实测回执（以 /verified 开头的评论）
+#   2. 没贴 -> 自动重开 + 打 needs-receipt 标签
+#   3. 贴了 -> 打 verified 标签 + @ 通知负责人
+on:
+  issues:
+    types: [closed]
+
+permissions:
+  issues: write
+
+jobs:
+  check:
+    if: contains(join(github.event.issue.labels.*.name, ','), 'gate:')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/github-script@v7
+        env:
+          NOTIFY: dylanyunlon        # 改这里换通知对象
+          HARD_ONLY: 'false'         # 改成 'true' 则只有 9 个硬门禁才 @ 人
+        with:
+          script: |
+            const issue = context.payload.issue;
+            const owner = context.repo.owner, repo = context.repo.repo;
+            const labels = issue.labels.map(l => l.name);
+            const isHard = labels.includes('gate:hard');
+
+            const { data: comments } = await github.rest.issues.listComments({
+              owner, repo, issue_number: issue.number, per_page: 100
+            });
+
+            const receipt = [...comments].reverse().find(c =>
+              /^\s*\/verified\b/m.test(c.body || '')
+            );
+
+            if (!receipt) {
+              await github.rest.issues.update({
+                owner, repo, issue_number: issue.number, state: 'open'
+              });
+              await github.rest.issues.addLabels({
+                owner, repo, issue_number: issue.number, labels: ['needs-receipt']
+              });
+              await github.rest.issues.createComment({
+                owner, repo, issue_number: issue.number,
+                body: [
+                  '**已自动重新打开：缺少实测回执。**',
+                  '',
+                  '这个 issue 带门禁标签，关闭前必须贴一条以 `/verified` 开头的评论，写清实测数字和产生它的命令。格式：',
+                  '',
+                  '```',
+                  '/verified 4KB allreduce = 27.4us/call',
+                  'cmd: torchrun --nproc_per_node=4 bench/latency_micro.py',
+                  'baseline: 251us · 三次重跑 p50 方差 3.1%',
+                  '```',
+                  '',
+                  '贴完再关一次就行。'
+                ].join('\n')
+              });
+              core.notice(`#${issue.number} 无回执，已重开`);
+              return;
+            }
+
+            const line = (receipt.body.match(/^\s*\/verified\s*(.*)$/m) || [])[1] || '(未填写数值)';
+            await github.rest.issues.addLabels({
+              owner, repo, issue_number: issue.number, labels: ['verified']
+            });
+            await github.rest.issues.removeLabel({
+              owner, repo, issue_number: issue.number, name: 'needs-receipt'
+            }).catch(() => {});
+
+            const hardOnly = process.env.HARD_ONLY === 'true';
+            const mention = (!hardOnly || isHard) ? `@${process.env.NOTIFY} ` : '';
+            const tag = isHard ? '硬门禁通过' : '指标达标';
+
+            await github.rest.issues.createComment({
+              owner, repo, issue_number: issue.number,
+              body: [
+                `${mention}**${tag}** — ${issue.title}`,
+                '',
+                `实测：${line}`,
+                `回执作者：@${receipt.user.login}`,
+                `里程碑：${issue.milestone ? issue.milestone.title : '（未设置）'}`,
+                '',
+                isHard
+                  ? '本里程碑后续 PR 解除挂起。'
+                  : '',
+                `回执原文：${receipt.html_url}`
+              ].filter(Boolean).join('\n')
+            });
+            core.notice(`#${issue.number} 通过：${line}`);
