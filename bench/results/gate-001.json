@@ -1,0 +1,11 @@
+{
+ "commit": "cc424de57abc32f3ecf8102da4f9f57d10f50d56",
+ "host": "ci-smoke-test (非真实硬件)",
+ "timestamp": "2026-09-30T12:32:46Z",
+ "cmd": "流程自测，非真实基准",
+ "metrics": {
+  "latency_p50_variance_pct": 8.7,
+  "output_lines": 6
+ },
+ "doc": "bench/results/README.md"
+}
