@@ -2012,6 +2012,12 @@ class CUDAGraphRunner(nn.Module):
         **kwargs,
     ):
         assert self._graph is None
+        # BI100: kv_caches and attn_metadata are consumed as named params of
+        # capture() so they don't end up in **kwargs.  Models like Qwen3_5
+        # need them as forward() args, so pass them explicitly.
+        _model_extra = dict(kwargs)
+        _model_extra["kv_caches"] = kv_caches
+        _model_extra["attn_metadata"] = attn_metadata
         # Run the model a few times without capturing the graph.
         # This is to make sure that the captured graph does not include the
         # kernel launches for initial benchmarking (e.g., Triton autotune).
@@ -2021,7 +2027,7 @@ class CUDAGraphRunner(nn.Module):
                 input_ids=input_ids,
                 positions=positions,
                 intermediate_tensors=intermediate_inputs,
-                **kwargs,
+                **_model_extra,
             )
         # Wait for the warm up operations to finish before proceeding with
         # Graph Capture.
@@ -2033,7 +2039,7 @@ class CUDAGraphRunner(nn.Module):
                 input_ids=input_ids,
                 positions=positions,
                 intermediate_tensors=intermediate_inputs,
-                **kwargs,
+                **_model_extra,
             )
 
             if isinstance(output_hidden_or_intermediate_states, torch.Tensor):

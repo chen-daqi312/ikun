@@ -2678,15 +2678,16 @@ class Qwen3_5Model(nn.Module):
         self,
         input_ids: torch.Tensor,
         positions: torch.Tensor,
-        kv_caches: List[torch.Tensor],
-        attn_metadata: AttentionMetadata,
-        conv_states: torch.Tensor,     # (num_linear_layers, batch, ...)
-        temporal_states: torch.Tensor, # (num_linear_layers, batch, ...)
+        kv_caches: Optional[List[torch.Tensor]] = None,
+        attn_metadata: Optional[AttentionMetadata] = None,
+        conv_states: Optional[torch.Tensor] = None,     # (num_linear_layers, batch, ...)
+        temporal_states: Optional[torch.Tensor] = None, # (num_linear_layers, batch, ...)
         inputs_embeds: Optional[torch.Tensor] = None,
         gdn_capture_offsets: Optional[Iterable[int]] = None,
         gdn_segment_offsets: Optional[Iterable[int]] = None,
     ) -> torch.Tensor:
-        _validate_qwen_kv_cache_count(self.kv_cache_count, kv_caches)
+        if kv_caches is not None:
+            _validate_qwen_kv_cache_count(self.kv_cache_count, kv_caches)
         with bi100_timer("model.embed"):
             hidden_states = (self.embed_tokens(input_ids)
                              if inputs_embeds is None else inputs_embeds)
@@ -2720,7 +2721,7 @@ class Qwen3_5Model(nn.Module):
                         layer.linear_attn.captured_temporal_states[offset])
                 linear_idx += 1
             else:
-                kv_cache = kv_caches[attn_idx]
+                kv_cache = kv_caches[attn_idx] if kv_caches is not None else None
                 hidden_states, residual = layer(
                     positions, hidden_states,
                     kv_cache=kv_cache,
@@ -2950,8 +2951,8 @@ class Qwen3_5ForCausalLM(nn.Module, HasInnerState, SupportsLoRA,
         self,
         input_ids: torch.Tensor,
         positions: torch.Tensor,
-        kv_caches: List[torch.Tensor],
-        attn_metadata: AttentionMetadata,
+        kv_caches: Optional[List[torch.Tensor]] = None,
+        attn_metadata: Optional[AttentionMetadata] = None,
         intermediate_tensors: Optional[IntermediateTensors] = None,
         **kwargs,
     ) -> torch.Tensor:
@@ -3091,9 +3092,11 @@ class Qwen3_5ForCausalLM(nn.Module, HasInnerState, SupportsLoRA,
                     inputs_embeds.dtype)
 
         with bi100_timer("model.forward"):
+            _is_graph_mode = (conv_states is None or temporal_states is None)
             _prof_step = getattr(self, '_ikun_prof_step', 0)
             self._ikun_prof_step = _prof_step + 1
-            _do_profile = (_prof_step == 15 and input_ids.shape[0] == 1)
+            _do_profile = (_prof_step == 15 and input_ids.shape[0] == 1
+                           and not _is_graph_mode)
             if _do_profile:
                 import torch.profiler as _tp
                 with _tp.profile(
