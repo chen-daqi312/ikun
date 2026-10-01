@@ -1,0 +1,28 @@
+name: bench-gate-001
+
+on:
+  workflow_dispatch:
+    inputs:
+      iters:
+        default: "200"
+      chunks:
+        default: "40"
+
+jobs:
+  allreduce-latency:
+    runs-on: [self-hosted, bi-v100]
+    steps:
+      - uses: actions/checkout@v4
+      - run: ixsmi
+      - run: torchrun --nproc_per_node=4 bench/latency_micro.py --iters ${{ inputs.iters }} --chunks ${{ inputs.chunks }} --out bench/results/gate-001.json
+      - run: cat bench/results/gate-001.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: gate-001
+          path: bench/results/gate-001.json
+      - run: |
+          git config user.name github-actions
+          git config user.email github-actions@github.com
+          git add bench/results/gate-001.json
+          git commit -m "bench(gate-001): allreduce latency from $(hostname), run ${{ github.run_id }}"
+          git push
